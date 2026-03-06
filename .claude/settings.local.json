@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create:*)",
+      "Bash(dir:*)",
+      "Bash(npx --yes create-vite@latest:*)",
+      "Bash(xcopy \"D:\\\\Documents\\\\Projects\\\\ExcellenceTracker2\\\\*\" \"D:\\\\Documents\\\\Projects\\\\ExcellenceTracker\"\" /E /Y /I 2>&1 && rmdir /S /Q \"D:DocumentsProjectsExcellenceTracker2 \")",
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(wc:*)",
+      "Bash(npx vite build:*)"
+    ]
+  }
+}
