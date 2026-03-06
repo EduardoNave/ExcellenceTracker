@@ -1,265 +1,170 @@
 -- 006_recurrence_and_invitations.sql
--- Adds service recurrence support and invitation tracking
+-- Adds service_schedules (recurring services) and invitations tables,
+-- plus the accept_invitation and generate_recurring_services functions.
+-- All objects are created in the salim_et schema.
 
 -- ============================================================
--- SERVICE_SCHEDULES: Recurrence rules for services
+-- service_schedules
 -- ============================================================
-CREATE TABLE service_schedules (
+CREATE TABLE IF NOT EXISTS salim_et.service_schedules (
     id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    group_id        uuid NOT NULL REFERENCES groups ON DELETE CASCADE,
+    group_id        uuid NOT NULL REFERENCES salim_et.groups ON DELETE CASCADE,
     name            text NOT NULL,
-    template_id     uuid REFERENCES checklist_templates ON DELETE SET NULL,
-    day_of_week     int NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
-    -- 0=Domingo, 1=Lunes, 2=Martes, 3=Miércoles, 4=Jueves, 5=Viernes, 6=Sábado
-    start_date      date NOT NULL DEFAULT CURRENT_DATE,
-    end_date        date,  -- NULL = no end date (indefinite)
+    recurrence      text NOT NULL CHECK (recurrence IN ('weekly', 'biweekly', 'monthly')),
+    day_of_week     int  CHECK (day_of_week BETWEEN 0 AND 6),
+    template_id     uuid REFERENCES salim_et.checklist_templates ON DELETE SET NULL,
     is_active       boolean NOT NULL DEFAULT true,
-    default_servers uuid[] DEFAULT '{}',  -- array of user IDs to auto-assign
-    notes           text,
-    created_by      uuid REFERENCES profiles ON DELETE SET NULL,
+    created_by      uuid REFERENCES salim_et.profiles ON DELETE SET NULL,
     created_at      timestamptz DEFAULT now(),
     updated_at      timestamptz DEFAULT now()
 );
 
--- Add recurrence link to services table
-ALTER TABLE services
-    ADD COLUMN schedule_id uuid REFERENCES service_schedules ON DELETE SET NULL,
-    ADD COLUMN is_recurring boolean NOT NULL DEFAULT false;
+DROP TRIGGER IF EXISTS set_updated_at ON salim_et.service_schedules;
+CREATE TRIGGER set_updated_at
+    BEFORE UPDATE ON salim_et.service_schedules
+    FOR EACH ROW EXECUTE FUNCTION salim_et.update_updated_at();
 
 -- ============================================================
--- INVITATIONS: Track pending invitations
+-- invitations
 -- ============================================================
-CREATE TABLE invitations (
-    id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    group_id        uuid NOT NULL REFERENCES groups ON DELETE CASCADE,
-    email           text NOT NULL,
-    invited_by      uuid NOT NULL REFERENCES profiles ON DELETE CASCADE,
-    status          text NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending', 'accepted', 'expired')),
-    token           uuid DEFAULT gen_random_uuid(),
-    created_at      timestamptz DEFAULT now(),
-    expires_at      timestamptz DEFAULT (now() + interval '7 days'),
-    UNIQUE (group_id, email)
+CREATE TABLE IF NOT EXISTS salim_et.invitations (
+    id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    group_id    uuid NOT NULL REFERENCES salim_et.groups ON DELETE CASCADE,
+    email       text NOT NULL,
+    token       text NOT NULL UNIQUE DEFAULT gen_random_uuid()::text,
+    invited_by  uuid REFERENCES salim_et.profiles ON DELETE SET NULL,
+    status      text NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'accepted', 'expired')),
+    expires_at  timestamptz NOT NULL DEFAULT (now() + interval '7 days'),
+    created_at  timestamptz DEFAULT now()
 );
 
 -- ============================================================
--- Triggers for updated_at
+-- RLS: service_schedules
 -- ============================================================
-CREATE TRIGGER set_updated_at
-    BEFORE UPDATE ON service_schedules
-    FOR EACH ROW
-    EXECUTE FUNCTION public.update_updated_at();
+ALTER TABLE salim_et.service_schedules ENABLE ROW LEVEL SECURITY;
 
--- ============================================================
--- Enable RLS
--- ============================================================
-ALTER TABLE service_schedules ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invitations       ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_schedules: members can view" ON salim_et.service_schedules
+    FOR SELECT USING (salim_et.is_group_member(group_id));
 
--- ============================================================
--- RLS for service_schedules
--- ============================================================
-CREATE POLICY service_schedules_select ON service_schedules
-    FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = service_schedules.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-        OR EXISTS (
-            SELECT 1 FROM group_members
-            WHERE group_members.group_id = service_schedules.group_id
-              AND group_members.user_id = auth.uid()
-        )
-    );
+CREATE POLICY "service_schedules: coordinators can insert" ON salim_et.service_schedules
+    FOR INSERT WITH CHECK (salim_et.is_group_coordinator(group_id));
 
-CREATE POLICY service_schedules_insert ON service_schedules
-    FOR INSERT WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = service_schedules.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
+CREATE POLICY "service_schedules: coordinators can update" ON salim_et.service_schedules
+    FOR UPDATE USING (salim_et.is_group_coordinator(group_id));
 
-CREATE POLICY service_schedules_update ON service_schedules
-    FOR UPDATE USING (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = service_schedules.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    ) WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = service_schedules.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
-
-CREATE POLICY service_schedules_delete ON service_schedules
-    FOR DELETE USING (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = service_schedules.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
+CREATE POLICY "service_schedules: coordinators can delete" ON salim_et.service_schedules
+    FOR DELETE USING (salim_et.is_group_coordinator(group_id));
 
 -- ============================================================
--- RLS for invitations
+-- RLS: invitations
 -- ============================================================
-CREATE POLICY invitations_select ON invitations
-    FOR SELECT USING (
-        invited_by = auth.uid()
-        OR EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = invitations.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
+ALTER TABLE salim_et.invitations ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY invitations_insert ON invitations
-    FOR INSERT WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = invitations.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
+-- Coordinators manage invitations for their groups
+CREATE POLICY "invitations: coordinators can manage" ON salim_et.invitations
+    FOR ALL USING (salim_et.is_group_coordinator(group_id));
 
-CREATE POLICY invitations_update ON invitations
-    FOR UPDATE USING (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = invitations.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
-
-CREATE POLICY invitations_delete ON invitations
-    FOR DELETE USING (
-        EXISTS (
-            SELECT 1 FROM groups
-            WHERE groups.id = invitations.group_id
-              AND groups.coordinator_id = auth.uid()
-        )
-    );
+-- Anyone with a valid token can look up their invitation (unauthenticated accept flow)
+CREATE POLICY "invitations: public token lookup" ON salim_et.invitations
+    FOR SELECT USING (true);
 
 -- ============================================================
--- Function: accept_invitation
--- Called when a user signs up via invitation link
+-- accept_invitation(p_token)
+-- Called by the client after the user signs in via the invite link.
 -- ============================================================
-CREATE OR REPLACE FUNCTION public.accept_invitation(invitation_token uuid)
+CREATE OR REPLACE FUNCTION salim_et.accept_invitation(p_token text)
 RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = salim_et
 AS $$
 DECLARE
-    inv RECORD;
+    v_inv     invitations%ROWTYPE;
+    v_uid     uuid := auth.uid();
 BEGIN
-    -- Find the invitation
-    SELECT * INTO inv
+    SELECT * INTO v_inv
     FROM invitations
-    WHERE token = invitation_token
+    WHERE token = p_token
       AND status = 'pending'
       AND expires_at > now();
 
     IF NOT FOUND THEN
-        RETURN json_build_object('success', false, 'error', 'Invitación no válida o expirada');
+        RETURN json_build_object('success', false, 'error', 'Invalid or expired invitation');
     END IF;
 
-    -- Add user to group_members
+    IF v_uid IS NULL THEN
+        RETURN json_build_object('success', false, 'error', 'Must be authenticated');
+    END IF;
+
+    -- Add member (ignore if already in the group)
     INSERT INTO group_members (group_id, user_id)
-    VALUES (inv.group_id, auth.uid())
+    VALUES (v_inv.group_id, v_uid)
     ON CONFLICT (group_id, user_id) DO NOTHING;
 
-    -- Mark invitation as accepted
-    UPDATE invitations
-    SET status = 'accepted'
-    WHERE id = inv.id;
+    -- Mark invitation accepted
+    UPDATE invitations SET status = 'accepted' WHERE id = v_inv.id;
 
-    RETURN json_build_object('success', true, 'group_id', inv.group_id);
+    RETURN json_build_object('success', true, 'group_id', v_inv.group_id);
 END;
 $$;
 
 -- ============================================================
--- Function: generate_recurring_services
--- Generates services for a schedule within a date range
+-- generate_recurring_services(p_schedule_id, p_from, p_to)
+-- Creates service rows for each occurrence in the date range.
+-- Returns the number of rows inserted.
 -- ============================================================
-CREATE OR REPLACE FUNCTION public.generate_recurring_services(
+CREATE OR REPLACE FUNCTION salim_et.generate_recurring_services(
     p_schedule_id uuid,
-    p_from_date date,
-    p_to_date date
+    p_from        date,
+    p_to          date
 )
 RETURNS int
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = salim_et
 AS $$
 DECLARE
-    sched RECORD;
-    current_date_iter date;
-    services_created int := 0;
-    new_service_id uuid;
-    server_id uuid;
+    v_sched   service_schedules%ROWTYPE;
+    v_date    date;
+    v_count   int := 0;
+    v_step    int;
 BEGIN
-    -- Get schedule details
-    SELECT * INTO sched
-    FROM service_schedules
-    WHERE id = p_schedule_id AND is_active = true;
+    SELECT * INTO v_sched FROM service_schedules WHERE id = p_schedule_id;
+    IF NOT FOUND THEN RETURN 0; END IF;
 
-    IF NOT FOUND THEN
-        RETURN 0;
+    v_step := CASE v_sched.recurrence
+        WHEN 'weekly'   THEN 7
+        WHEN 'biweekly' THEN 14
+        WHEN 'monthly'  THEN 28
+        ELSE 7
+    END;
+
+    v_date := p_from;
+
+    -- Advance to first matching day-of-week on or after p_from
+    IF v_sched.day_of_week IS NOT NULL THEN
+        WHILE EXTRACT(DOW FROM v_date)::int <> v_sched.day_of_week LOOP
+            v_date := v_date + 1;
+        END LOOP;
     END IF;
 
-    -- Iterate through dates
-    current_date_iter := p_from_date;
-    WHILE current_date_iter <= p_to_date LOOP
-        -- Check if this date matches the day_of_week
-        IF EXTRACT(DOW FROM current_date_iter) = sched.day_of_week THEN
-            -- Check date is within schedule bounds
-            IF current_date_iter >= sched.start_date
-               AND (sched.end_date IS NULL OR current_date_iter <= sched.end_date) THEN
-                -- Check no service already exists for this schedule+date
-                IF NOT EXISTS (
-                    SELECT 1 FROM services
-                    WHERE schedule_id = p_schedule_id
-                      AND date = current_date_iter
-                ) THEN
-                    -- Create the service
-                    INSERT INTO services (group_id, date, name, template_id, notes, created_by, schedule_id, is_recurring, status)
-                    VALUES (sched.group_id, current_date_iter, sched.name, sched.template_id, sched.notes, sched.created_by, p_schedule_id, true, 'scheduled')
-                    RETURNING id INTO new_service_id;
+    WHILE v_date <= p_to LOOP
+        INSERT INTO services (group_id, date, name, template_id, status, created_by)
+        VALUES (
+            v_sched.group_id,
+            v_date,
+            v_sched.name,
+            v_sched.template_id,
+            'scheduled',
+            auth.uid()
+        )
+        ON CONFLICT DO NOTHING;
 
-                    -- Auto-assign default servers
-                    IF sched.default_servers IS NOT NULL AND array_length(sched.default_servers, 1) > 0 THEN
-                        FOREACH server_id IN ARRAY sched.default_servers LOOP
-                            INSERT INTO service_assignments (service_id, user_id)
-                            VALUES (new_service_id, server_id)
-                            ON CONFLICT (service_id, user_id) DO NOTHING;
-                        END LOOP;
-                    END IF;
-
-                    services_created := services_created + 1;
-                END IF;
-            END IF;
-        END IF;
-
-        current_date_iter := current_date_iter + 1;
+        v_count := v_count + 1;
+        v_date  := v_date + v_step;
     END LOOP;
 
-    RETURN services_created;
+    RETURN v_count;
 END;
 $$;
-
--- ============================================================
--- Indexes
--- ============================================================
-CREATE INDEX idx_service_schedules_group ON service_schedules(group_id);
-CREATE INDEX idx_service_schedules_day ON service_schedules(day_of_week);
-CREATE INDEX idx_services_schedule ON services(schedule_id);
-CREATE INDEX idx_invitations_token ON invitations(token);
-CREATE INDEX idx_invitations_group ON invitations(group_id);
-CREATE INDEX idx_invitations_email ON invitations(email);

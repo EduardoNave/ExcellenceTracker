@@ -5,8 +5,7 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  db: { schema: 'public' },
-  // db: { schema: 'salim_et' },
+  db: { schema: 'salim_et' },
 }) as any
 
 // Re-export typed helper for when needed

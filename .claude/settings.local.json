@@ -12,7 +12,14 @@
       "Bash(wc:*)",
       "Bash(npx vite build:*)",
       "Bash(docker --version)",
-      "Bash(docker build --build-arg VITE_SUPABASE_URL=https://placeholder.supabase.co --build-arg VITE_SUPABASE_ANON_KEY=placeholder-key --tag excellence-tracker:test .)"
+      "Bash(docker build --build-arg VITE_SUPABASE_URL=https://placeholder.supabase.co --build-arg VITE_SUPABASE_ANON_KEY=placeholder-key --tag excellence-tracker:test .)",
+      "Bash(\"/d/Documents/Projects/ExcellenceTracker/supabase/migrations/001_initial_schema.sql\":*)",
+      "Bash(\"/d/Documents/Projects/ExcellenceTracker/supabase/migrations/002_functions_triggers.sql\":*)",
+      "Bash(\"/d/Documents/Projects/ExcellenceTracker/supabase/migrations/003_rls_policies.sql\":*)",
+      "Bash(python3 -:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(/c/Python313/python -c \"import sys; print\\(sys.version\\); import os; print\\(os.path.isdir\\(''D:/Documents/Projects/ExcellenceTracker/supabase/migrations''\\)\\)\")",
+      "Bash(python3:*)"
     ]
   }
 }

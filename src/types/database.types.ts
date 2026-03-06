@@ -7,7 +7,7 @@ export type Json =
   | Json[]
 
 export type Database = {
-  public: {
+  salim_et: {
     Tables: {
       profiles: {
         Row: {
@@ -364,9 +364,9 @@ export type Database = {
   }
 }
 
-export type Tables<T extends keyof Database['public']['Tables']> =
-  Database['public']['Tables'][T]['Row']
-export type InsertTables<T extends keyof Database['public']['Tables']> =
-  Database['public']['Tables'][T]['Insert']
-export type UpdateTables<T extends keyof Database['public']['Tables']> =
-  Database['public']['Tables'][T]['Update']
+export type Tables<T extends keyof Database['salim_et']['Tables']> =
+  Database['salim_et']['Tables'][T]['Row']
+export type InsertTables<T extends keyof Database['salim_et']['Tables']> =
+  Database['salim_et']['Tables'][T]['Insert']
+export type UpdateTables<T extends keyof Database['salim_et']['Tables']> =
+  Database['salim_et']['Tables'][T]['Update']
