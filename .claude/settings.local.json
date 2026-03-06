@@ -10,7 +10,9 @@
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
       "Bash(wc:*)",
-      "Bash(npx vite build:*)"
+      "Bash(npx vite build:*)",
+      "Bash(docker --version)",
+      "Bash(docker build --build-arg VITE_SUPABASE_URL=https://placeholder.supabase.co --build-arg VITE_SUPABASE_ANON_KEY=placeholder-key --tag excellence-tracker:test .)"
     ]
   }
 }
