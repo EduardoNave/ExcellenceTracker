@@ -7,6 +7,7 @@ export interface CoordinatorInvitation {
   email: string
   token: string
   invited_by: string | null
+  accepted_by: string | null
   status: 'pending' | 'accepted' | 'expired'
   expires_at: string
   created_at: string
@@ -26,55 +27,123 @@ export interface ListCoordinatorInvitationsResponse {
   coordinators: CoordinatorProfile[]
 }
 
-async function getAccessToken(): Promise<string> {
-  const { data } = await supabase.auth.getSession()
-  const token = data.session?.access_token
-  if (!token) throw new Error('No hay sesión activa')
-  return token
-}
-
+// ---------------------------------------------------------------------------
+// List — all coordinator invitations + all coordinator profiles with group count
+// Requires the admin RLS policies from migration 011 to be applied.
+// ---------------------------------------------------------------------------
 export async function listCoordinatorInvitations(): Promise<ListCoordinatorInvitationsResponse> {
-  const token = await getAccessToken()
-  const res = await fetch(`${EDGE_FN_BASE}/coordinator-invitations`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.error ?? `Error ${res.status}`)
+  const [invResult, profResult, grpResult] = await Promise.all([
+    supabase
+      .from('coordinator_invitations')
+      .select('*')
+      .order('created_at', { ascending: false }),
+
+    supabase
+      .from('profiles')
+      .select('id, full_name, email, created_at')
+      .eq('role', 'coordinator'),
+
+    supabase
+      .from('groups')
+      .select('coordinator_id'),
+  ])
+
+  if (invResult.error) throw new Error(invResult.error.message)
+  if (profResult.error) throw new Error(profResult.error.message)
+  // group count failure is non-fatal — just show 0
+  const groupRows = grpResult.data ?? []
+
+  const groupCountMap: Record<string, number> = {}
+  for (const g of groupRows) {
+    groupCountMap[g.coordinator_id] = (groupCountMap[g.coordinator_id] ?? 0) + 1
   }
-  return res.json()
+
+  const coordinators: CoordinatorProfile[] = (profResult.data ?? []).map((p: {
+    id: string
+    full_name: string
+    email: string | null
+    created_at: string
+  }) => ({
+    id: p.id,
+    full_name: p.full_name,
+    email: p.email ?? '',
+    role: 'coordinator',
+    group_count: groupCountMap[p.id] ?? 0,
+    created_at: p.created_at,
+  }))
+
+  return {
+    invitations: (invResult.data ?? []) as CoordinatorInvitation[],
+    coordinators,
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Create — inserts directly via the Supabase client.
+// The "coordinator_invitations: admin insert" RLS policy (migration 011)
+// allows this when is_admin() returns true.
+// Email sending is attempted via edge function but is fully optional —
+// the admin can always copy the invitation link manually.
+// ---------------------------------------------------------------------------
 export async function createCoordinatorInvitation(
   email: string
 ): Promise<{ invitation: CoordinatorInvitation; inviteLink: string; emailSent: boolean }> {
-  const token = await getAccessToken()
-  const res = await fetch(`${EDGE_FN_BASE}/coordinator-invitations`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ email }),
-  })
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(body.error ?? `Error ${res.status}`)
-  return body
-}
+  const { data: { user } } = await supabase.auth.getUser()
 
-export async function deleteCoordinatorInvitation(id: string): Promise<void> {
-  const token = await getAccessToken()
-  const res = await fetch(`${EDGE_FN_BASE}/coordinator-invitations?id=${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.error ?? `Error ${res.status}`)
+  const { data, error } = await supabase
+    .from('coordinator_invitations')
+    .insert({ email, invited_by: user?.id ?? null })
+    .select()
+    .single()
+
+  if (error) throw new Error(error.message)
+
+  const invitation = data as CoordinatorInvitation
+  const inviteLink = `${window.location.origin}/coordinator-invite/${invitation.token}`
+
+  // Attempt email via edge function (optional — graceful fail if not deployed)
+  let emailSent = false
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session?.access_token) {
+      const res = await fetch(`${EDGE_FN_BASE}/coordinator-invitations`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        // emailOnly: true tells the edge function NOT to re-insert the record,
+        // just send the Brevo email for an already-created invitation.
+        body: JSON.stringify({ email, token: invitation.token, inviteLink, emailOnly: true }),
+      })
+      emailSent = res.ok
+    }
+  } catch {
+    console.warn('Could not send coordinator invitation email (edge function unavailable)')
   }
+
+  return { invitation, inviteLink, emailSent }
 }
 
-export async function acceptCoordinatorInvitation(token: string): Promise<{ success: boolean; error?: string }> {
+// ---------------------------------------------------------------------------
+// Delete — uses RLS policy "coordinator_invitations: admin delete"
+// ---------------------------------------------------------------------------
+export async function deleteCoordinatorInvitation(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('coordinator_invitations')
+    .delete()
+    .eq('id', id)
+
+  if (error) throw new Error(error.message)
+}
+
+// ---------------------------------------------------------------------------
+// Accept — called client-side by the coordinator accepting their invite.
+// Uses the accept_coordinator_invitation() SECURITY DEFINER RPC.
+// ---------------------------------------------------------------------------
+export async function acceptCoordinatorInvitation(
+  token: string
+): Promise<{ success: boolean; error?: string }> {
   const { data, error } = await supabase.rpc('accept_coordinator_invitation', {
     p_token: token,
   }) as any
@@ -82,17 +151,23 @@ export async function acceptCoordinatorInvitation(token: string): Promise<{ succ
   return data
 }
 
+// ---------------------------------------------------------------------------
+// Send group invitation email — calls edge function (best-effort).
+// Non-fatal: logs a warning if the edge function is unavailable.
+// ---------------------------------------------------------------------------
 export async function sendGroupInvitationEmail(params: {
   toEmail: string
   inviteLink: string
   groupName: string
   invitedByName: string
 }): Promise<void> {
-  const accessToken = await getAccessToken()
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) return
+
   const res = await fetch(`${EDGE_FN_BASE}/send-group-invitation-email`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -104,7 +179,6 @@ export async function sendGroupInvitationEmail(params: {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    // Email failure is non-fatal — just log it
     console.warn('Failed to send group invitation email:', body.error)
   }
 }

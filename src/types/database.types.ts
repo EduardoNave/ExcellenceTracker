@@ -15,6 +15,8 @@ export type Database = {
           full_name: string
           avatar_url: string | null
           role: 'coordinator' | 'server'
+          email: string | null
+          is_admin: boolean
           created_at: string
           updated_at: string
         }
@@ -23,6 +25,8 @@ export type Database = {
           full_name: string
           avatar_url?: string | null
           role?: 'coordinator' | 'server'
+          email?: string | null
+          is_admin?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -31,6 +35,8 @@ export type Database = {
           full_name?: string
           avatar_url?: string | null
           role?: 'coordinator' | 'server'
+          email?: string | null
+          is_admin?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -334,6 +340,7 @@ export type Database = {
           email: string
           token: string
           invited_by: string | null
+          accepted_by: string | null
           status: 'pending' | 'accepted' | 'expired'
           expires_at: string
           created_at: string
@@ -343,6 +350,7 @@ export type Database = {
           email: string
           token?: string
           invited_by?: string | null
+          accepted_by?: string | null
           status?: 'pending' | 'accepted' | 'expired'
           expires_at?: string
           created_at?: string
@@ -352,6 +360,7 @@ export type Database = {
           email?: string
           token?: string
           invited_by?: string | null
+          accepted_by?: string | null
           status?: 'pending' | 'accepted' | 'expired'
           expires_at?: string
           created_at?: string
