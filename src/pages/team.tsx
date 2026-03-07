@@ -17,6 +17,7 @@ import {
   useDeleteInvitation,
   useResendInvitation,
 } from '@/hooks/use-invitations'
+import { sendGroupInvitationEmail } from '@/api/coordinator-invitations'
 import { LoadingSpinner } from '@/components/common/loading-spinner'
 import { EmptyState } from '@/components/common/empty-state'
 import { Modal } from '@/components/common/modal'
@@ -190,6 +191,14 @@ export default function TeamPage() {
         siteUrl,
       })
       setInviteLink(result.inviteLink)
+
+      // Send email notification via Brevo (non-blocking, best-effort)
+      sendGroupInvitationEmail({
+        toEmail: inviteEmail,
+        inviteLink: result.inviteLink,
+        groupName: activeGroup.name,
+        invitedByName: user.user_metadata?.full_name ?? user.email ?? 'Un coordinador',
+      }).catch(() => {/* silently ignore email failures */})
     } catch (err: any) {
       setInviteError(err?.message ?? 'Error al invitar servidor')
     }

@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { ProtectedLayout } from '@/components/auth/protected-layout'
 import { CoordinatorRoute } from '@/components/auth/coordinator-route'
+import { AdminRoute } from '@/components/auth/admin-route'
 import LoginPage from '@/pages/login'
 import DashboardPage from '@/pages/dashboard'
 import TeamPage from '@/pages/team'
@@ -12,6 +13,8 @@ import EvaluationPage from '@/pages/evaluation'
 import ReportsPage from '@/pages/reports'
 import ProfilePage from '@/pages/profile'
 import InvitePage from '@/pages/invite'
+import CoordinatorInvitePage from '@/pages/coordinator-invite'
+import AdminPage from '@/pages/admin'
 
 export const router = createBrowserRouter([
   {
@@ -21,6 +24,10 @@ export const router = createBrowserRouter([
   {
     path: '/invite/:token',
     element: <InvitePage />,
+  },
+  {
+    path: '/coordinator-invite/:token',
+    element: <CoordinatorInvitePage />,
   },
   {
     path: '/',
@@ -33,6 +40,14 @@ export const router = createBrowserRouter([
       {
         path: 'dashboard',
         element: <DashboardPage />,
+      },
+      {
+        path: 'admin',
+        element: (
+          <AdminRoute>
+            <AdminPage />
+          </AdminRoute>
+        ),
       },
       {
         path: 'team',

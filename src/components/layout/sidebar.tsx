@@ -6,6 +6,7 @@ import {
   Calendar,
   BarChart3,
   LogOut,
+  ShieldCheck,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 
@@ -28,7 +29,7 @@ const serverLinks = [
 ]
 
 export function Sidebar({ onClose }: SidebarProps) {
-  const { profile, signOut } = useAuth()
+  const { profile, signOut, isAdmin } = useAuth()
 
   const links = profile?.role === 'coordinator' ? coordinatorLinks : serverLinks
 
@@ -65,6 +66,22 @@ export function Sidebar({ onClose }: SidebarProps) {
       </nav>
 
       <div className="border-t border-primary-800 p-4">
+        {isAdmin && (
+          <NavLink
+            to="/admin"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `mb-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                isActive
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-primary-200 hover:bg-primary-900 hover:text-white'
+              }`
+            }
+          >
+            <ShieldCheck className="h-5 w-5" />
+            Administración
+          </NavLink>
+        )}
         <div className="mb-3 px-1">
           <p className="text-sm font-medium text-white">
             {profile?.full_name ?? 'Usuario'}

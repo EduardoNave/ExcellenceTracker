@@ -328,6 +328,35 @@ export type Database = {
           expires_at?: string
         }
       }
+      coordinator_invitations: {
+        Row: {
+          id: string
+          email: string
+          token: string
+          invited_by: string | null
+          status: 'pending' | 'accepted' | 'expired'
+          expires_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          email: string
+          token?: string
+          invited_by?: string | null
+          status?: 'pending' | 'accepted' | 'expired'
+          expires_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          email?: string
+          token?: string
+          invited_by?: string | null
+          status?: 'pending' | 'accepted' | 'expired'
+          expires_at?: string
+          created_at?: string
+        }
+      }
       evaluation_items: {
         Row: {
           id: string

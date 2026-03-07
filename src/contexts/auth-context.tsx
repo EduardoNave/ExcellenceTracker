@@ -7,9 +7,11 @@ interface AuthContextType {
   user: User | null
   profile: Profile | null
   isLoading: boolean
+  isAdmin: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string, fullName: string, role: string) => Promise<void>
   signOut: () => Promise<void>
+  refreshProfile: () => Promise<void>
 }
 
 export const AuthContext = createContext<AuthContextType | null>(null)
@@ -18,6 +20,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+
+  const adminEmail = import.meta.env.VITE_ADMIN_EMAIL
+  const isAdmin = !!user && !!adminEmail && user.email === adminEmail
 
   const fetchProfile = useCallback(async (userId: string) => {
     const { data, error } = await supabase
@@ -35,6 +40,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(data)
   }, [])
 
+  const refreshProfile = useCallback(async () => {
+    if (!user) return
+    await fetchProfile(user.id)
+  }, [user, fetchProfile])
+
   const handlePendingInvitation = useCallback(async () => {
     const pendingToken = localStorage.getItem('pending_invitation_token')
     if (!pendingToken) return
@@ -50,12 +60,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const handlePendingCoordinatorInvitation = useCallback(async () => {
+    const pendingToken = localStorage.getItem('pending_coordinator_invitation_token')
+    if (!pendingToken) return
+    try {
+      const { data } = await supabase.rpc('accept_coordinator_invitation', {
+        p_token: pendingToken,
+      }) as any
+      if (data?.success) {
+        localStorage.removeItem('pending_coordinator_invitation_token')
+      }
+    } catch (_err) {
+      // Silently fail - invitation may have expired
+    }
+  }, [])
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }: any) => {
       setUser(session?.user ?? null)
       if (session?.user) {
         fetchProfile(session.user.id)
         handlePendingInvitation()
+        handlePendingCoordinatorInvitation()
       }
       setIsLoading(false)
     })
@@ -66,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (session?.user) {
           fetchProfile(session.user.id)
           handlePendingInvitation()
+          handlePendingCoordinatorInvitation()
         } else {
           setProfile(null)
         }
@@ -74,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     )
 
     return () => subscription.unsubscribe()
-  }, [fetchProfile, handlePendingInvitation])
+  }, [fetchProfile, handlePendingInvitation, handlePendingCoordinatorInvitation])
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -103,7 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, isLoading, signIn, signUp, signOut }}>
+    <AuthContext.Provider
+      value={{ user, profile, isLoading, isAdmin, signIn, signUp, signOut, refreshProfile }}
+    >
       {children}
     </AuthContext.Provider>
   )
