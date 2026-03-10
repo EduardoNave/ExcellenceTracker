@@ -2,6 +2,7 @@
 -- Adds service_schedules (recurring services) and invitations tables,
 -- plus the accept_invitation and generate_recurring_services functions.
 -- All objects are created in the salim_et schema.
+-- Fully idempotent: DROP POLICY IF EXISTS before every CREATE POLICY.
 
 -- ============================================================
 -- service_schedules
@@ -44,15 +45,19 @@ CREATE TABLE IF NOT EXISTS salim_et.invitations (
 -- ============================================================
 ALTER TABLE salim_et.service_schedules ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "service_schedules: members can view" ON salim_et.service_schedules;
 CREATE POLICY "service_schedules: members can view" ON salim_et.service_schedules
     FOR SELECT USING (salim_et.is_group_member(group_id));
 
+DROP POLICY IF EXISTS "service_schedules: coordinators can insert" ON salim_et.service_schedules;
 CREATE POLICY "service_schedules: coordinators can insert" ON salim_et.service_schedules
     FOR INSERT WITH CHECK (salim_et.is_group_coordinator(group_id));
 
+DROP POLICY IF EXISTS "service_schedules: coordinators can update" ON salim_et.service_schedules;
 CREATE POLICY "service_schedules: coordinators can update" ON salim_et.service_schedules
     FOR UPDATE USING (salim_et.is_group_coordinator(group_id));
 
+DROP POLICY IF EXISTS "service_schedules: coordinators can delete" ON salim_et.service_schedules;
 CREATE POLICY "service_schedules: coordinators can delete" ON salim_et.service_schedules
     FOR DELETE USING (salim_et.is_group_coordinator(group_id));
 
@@ -62,10 +67,12 @@ CREATE POLICY "service_schedules: coordinators can delete" ON salim_et.service_s
 ALTER TABLE salim_et.invitations ENABLE ROW LEVEL SECURITY;
 
 -- Coordinators manage invitations for their groups
+DROP POLICY IF EXISTS "invitations: coordinators can manage" ON salim_et.invitations;
 CREATE POLICY "invitations: coordinators can manage" ON salim_et.invitations
     FOR ALL USING (salim_et.is_group_coordinator(group_id));
 
 -- Anyone with a valid token can look up their invitation (unauthenticated accept flow)
+DROP POLICY IF EXISTS "invitations: public token lookup" ON salim_et.invitations;
 CREATE POLICY "invitations: public token lookup" ON salim_et.invitations
     FOR SELECT USING (true);
 

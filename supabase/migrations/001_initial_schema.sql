@@ -1,22 +1,20 @@
 -- 001_initial_schema.sql
--- Creates the salim_et schema and all application tables
+-- Creates the salim_et schema and all application tables.
+-- Fully idempotent: all CREATE TABLE use IF NOT EXISTS.
+-- GRANTs are at the END (after all tables exist) + DEFAULT PRIVILEGES
+-- so every future migration's tables are automatically covered.
 
 -- ============================================================
--- Schema + permissions
+-- Schema
 -- ============================================================
 CREATE SCHEMA IF NOT EXISTS salim_et;
-
-GRANT USAGE ON SCHEMA salim_et TO anon, authenticated, service_role;
-GRANT ALL ON ALL TABLES    IN SCHEMA salim_et TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA salim_et TO anon, authenticated, service_role;
-GRANT ALL ON ALL FUNCTIONS IN SCHEMA salim_et TO anon, authenticated, service_role;
 
 -- ============================================================
 -- Tables
 -- ============================================================
 
 -- profiles
-CREATE TABLE salim_et.profiles (
+CREATE TABLE IF NOT EXISTS salim_et.profiles (
     id          uuid PRIMARY KEY REFERENCES auth.users ON DELETE CASCADE,
     full_name   text NOT NULL,
     avatar_url  text,
@@ -27,7 +25,7 @@ CREATE TABLE salim_et.profiles (
 );
 
 -- groups
-CREATE TABLE salim_et.groups (
+CREATE TABLE IF NOT EXISTS salim_et.groups (
     id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     name            text NOT NULL,
     description     text,
@@ -37,7 +35,7 @@ CREATE TABLE salim_et.groups (
 );
 
 -- group_members
-CREATE TABLE salim_et.group_members (
+CREATE TABLE IF NOT EXISTS salim_et.group_members (
     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     group_id    uuid NOT NULL REFERENCES salim_et.groups ON DELETE CASCADE,
     user_id     uuid NOT NULL REFERENCES salim_et.profiles ON DELETE CASCADE,
@@ -46,7 +44,7 @@ CREATE TABLE salim_et.group_members (
 );
 
 -- checklist_templates
-CREATE TABLE salim_et.checklist_templates (
+CREATE TABLE IF NOT EXISTS salim_et.checklist_templates (
     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     group_id    uuid NOT NULL REFERENCES salim_et.groups ON DELETE CASCADE,
     name        text NOT NULL,
@@ -57,7 +55,7 @@ CREATE TABLE salim_et.checklist_templates (
 );
 
 -- checklist_sections
-CREATE TABLE salim_et.checklist_sections (
+CREATE TABLE IF NOT EXISTS salim_et.checklist_sections (
     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     template_id uuid NOT NULL REFERENCES salim_et.checklist_templates ON DELETE CASCADE,
     name        text NOT NULL,
@@ -66,7 +64,7 @@ CREATE TABLE salim_et.checklist_sections (
 );
 
 -- checklist_items
-CREATE TABLE salim_et.checklist_items (
+CREATE TABLE IF NOT EXISTS salim_et.checklist_items (
     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     section_id  uuid NOT NULL REFERENCES salim_et.checklist_sections ON DELETE CASCADE,
     description text NOT NULL,
@@ -77,7 +75,7 @@ CREATE TABLE salim_et.checklist_items (
 );
 
 -- services
-CREATE TABLE salim_et.services (
+CREATE TABLE IF NOT EXISTS salim_et.services (
     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     group_id    uuid NOT NULL REFERENCES salim_et.groups ON DELETE CASCADE,
     date        date NOT NULL,
@@ -92,7 +90,7 @@ CREATE TABLE salim_et.services (
 );
 
 -- service_assignments
-CREATE TABLE salim_et.service_assignments (
+CREATE TABLE IF NOT EXISTS salim_et.service_assignments (
     id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     service_id  uuid NOT NULL REFERENCES salim_et.services ON DELETE CASCADE,
     user_id     uuid NOT NULL REFERENCES salim_et.profiles ON DELETE CASCADE,
@@ -100,7 +98,7 @@ CREATE TABLE salim_et.service_assignments (
 );
 
 -- service_evaluations
-CREATE TABLE salim_et.service_evaluations (
+CREATE TABLE IF NOT EXISTS salim_et.service_evaluations (
     id           uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     service_id   uuid NOT NULL REFERENCES salim_et.services ON DELETE CASCADE,
     user_id      uuid NOT NULL REFERENCES salim_et.profiles ON DELETE CASCADE,
@@ -112,7 +110,7 @@ CREATE TABLE salim_et.service_evaluations (
 );
 
 -- evaluation_items
-CREATE TABLE salim_et.evaluation_items (
+CREATE TABLE IF NOT EXISTS salim_et.evaluation_items (
     id                uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     evaluation_id     uuid NOT NULL REFERENCES salim_et.service_evaluations ON DELETE CASCADE,
     checklist_item_id uuid NOT NULL REFERENCES salim_et.checklist_items ON DELETE CASCADE,
@@ -121,3 +119,22 @@ CREATE TABLE salim_et.evaluation_items (
     score             numeric(5, 2) DEFAULT 0,
     UNIQUE (evaluation_id, checklist_item_id)
 );
+
+-- ============================================================
+-- Permissions
+-- GRANTs must come AFTER all CREATE TABLE statements so that
+-- "GRANT ALL ON ALL TABLES" covers every table in the schema.
+-- DEFAULT PRIVILEGES ensures tables added in future migrations
+-- are also automatically covered without additional GRANT steps.
+-- ============================================================
+GRANT USAGE ON SCHEMA salim_et TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES    IN SCHEMA salim_et TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA salim_et TO anon, authenticated, service_role;
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA salim_et TO anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA salim_et
+    GRANT ALL ON TABLES    TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA salim_et
+    GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA salim_et
+    GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;

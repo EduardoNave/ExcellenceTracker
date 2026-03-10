@@ -1,8 +1,7 @@
 -- 010_coordinator_invitations.sql
 -- Adds coordinator_invitations table so the admin can invite coordinators
 -- without using the public sign-up form.
--- All writes go through an edge function (service_role bypasses RLS).
--- The only client-accessible operation is SELECT for token lookup.
+-- Fully idempotent: DROP POLICY IF EXISTS before every CREATE POLICY.
 
 -- ============================================================
 -- coordinator_invitations
@@ -22,18 +21,16 @@ ALTER TABLE salim_et.coordinator_invitations ENABLE ROW LEVEL SECURITY;
 
 -- Anyone can look up an invitation by its token (needed for the accept flow
 -- before the user is authenticated).
+DROP POLICY IF EXISTS "coordinator_invitations: public token lookup" ON salim_et.coordinator_invitations;
 CREATE POLICY "coordinator_invitations: public token lookup"
     ON salim_et.coordinator_invitations
     FOR SELECT USING (true);
-
--- INSERT / UPDATE / DELETE are intentionally not granted to the anon or
--- authenticated roles — those operations go through the edge function which
--- uses the service_role key (bypasses RLS entirely).
 
 -- ============================================================
 -- accept_coordinator_invitation(p_token)
 -- Called client-side once the invited coordinator is authenticated.
 -- Sets their profile role to 'coordinator' and marks the invitation accepted.
+-- Updated by migration 011 to also set accepted_by.
 -- ============================================================
 CREATE OR REPLACE FUNCTION salim_et.accept_coordinator_invitation(p_token text)
 RETURNS json

@@ -43,21 +43,25 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS set_updated_at ON salim_et.profiles;
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON salim_et.profiles
     FOR EACH ROW
     EXECUTE FUNCTION salim_et.update_updated_at();
 
+DROP TRIGGER IF EXISTS set_updated_at ON salim_et.groups;
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON salim_et.groups
     FOR EACH ROW
     EXECUTE FUNCTION salim_et.update_updated_at();
 
+DROP TRIGGER IF EXISTS set_updated_at ON salim_et.checklist_templates;
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON salim_et.checklist_templates
     FOR EACH ROW
     EXECUTE FUNCTION salim_et.update_updated_at();
 
+DROP TRIGGER IF EXISTS set_updated_at ON salim_et.services;
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON salim_et.services
     FOR EACH ROW

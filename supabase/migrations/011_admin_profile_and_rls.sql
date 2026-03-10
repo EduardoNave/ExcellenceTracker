@@ -4,6 +4,7 @@
 -- Adds direct-client INSERT/DELETE policies for coordinator_invitations.
 -- Adds admin SELECT ALL policies for profiles and groups.
 -- Adds accepted_by column to coordinator_invitations.
+-- Fully idempotent: DROP POLICY IF EXISTS before every CREATE POLICY.
 
 -- ============================================================
 -- 1. Add email + is_admin columns to profiles
@@ -116,12 +117,14 @@ $$;
 -- 6. coordinator_invitations: admin can INSERT and DELETE
 --    (SELECT policy already exists from migration 010)
 -- ============================================================
+DROP POLICY IF EXISTS "coordinator_invitations: admin insert" ON salim_et.coordinator_invitations;
 CREATE POLICY "coordinator_invitations: admin insert"
     ON salim_et.coordinator_invitations
     FOR INSERT
     TO authenticated
     WITH CHECK (salim_et.is_admin());
 
+DROP POLICY IF EXISTS "coordinator_invitations: admin delete" ON salim_et.coordinator_invitations;
 CREATE POLICY "coordinator_invitations: admin delete"
     ON salim_et.coordinator_invitations
     FOR DELETE
@@ -133,6 +136,7 @@ CREATE POLICY "coordinator_invitations: admin delete"
 --    (existing "profiles: own row" policy covers own profile;
 --     this policy additionally lets the admin see everyone)
 -- ============================================================
+DROP POLICY IF EXISTS "profiles: admin select all" ON salim_et.profiles;
 CREATE POLICY "profiles: admin select all"
     ON salim_et.profiles
     FOR SELECT
@@ -143,6 +147,7 @@ CREATE POLICY "profiles: admin select all"
 -- 8. groups: admin can SELECT all rows
 --    (needed so the admin panel can count groups per coordinator)
 -- ============================================================
+DROP POLICY IF EXISTS "groups: admin select all" ON salim_et.groups;
 CREATE POLICY "groups: admin select all"
     ON salim_et.groups
     FOR SELECT

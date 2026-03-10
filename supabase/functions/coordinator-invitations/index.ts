@@ -1,14 +1,21 @@
 // supabase/functions/coordinator-invitations/index.ts
-// Admin CRUD for coordinator invitations + Brevo email sending.
+// Email-only handler for coordinator invitations.
+// The DB record is now created client-side (migration 011 RLS policies).
+// This function's only job is to send the Brevo email.
 //
-// Required secrets (set in Supabase dashboard → Edge Functions → Secrets):
-//   BREVO_API_KEY   — Brevo transactional email API key
-//   ADMIN_EMAIL     — email address of the admin user
-//   SENDER_EMAIL    — "from" email address shown to recipients
-//   SENDER_NAME     — "from" display name shown to recipients
-//   SITE_URL        — public URL of the app (e.g. https://app.example.com)
+// Required secrets (env vars on the edge-runtime container):
+//   BREVO_API_KEY   — Brevo transactional API key (starts with "xkeysib-")
+//   ADMIN_EMAIL     — email address of the admin (must match VITE_ADMIN_EMAIL)
+//   SENDER_EMAIL    — "From" address shown to recipients (must be verified in Brevo)
+//   SENDER_NAME     — "From" display name shown to recipients
+//   SITE_URL        — public URL of the app (e.g. https://salimet.example.com)
 //
-// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected automatically.
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected automatically by the runtime.
+//
+// POST body:
+//   { email, token, inviteLink, emailOnly: true }
+//   emailOnly:true  → just send email, record already exists in DB
+//   emailOnly:false (default) → legacy: create record + send email
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -19,16 +26,13 @@ const corsHeaders = {
 }
 
 Deno.serve(async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
-  // ── Auth check ──────────────────────────────────────────────────────────────
+  // ── Auth: must be the admin ──────────────────────────────────────────────
   const authHeader = req.headers.get('Authorization')
-  if (!authHeader) {
-    return json({ error: 'Missing Authorization header' }, 401)
-  }
+  if (!authHeader) return json({ error: 'Missing Authorization header' }, 401)
 
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -38,33 +42,23 @@ Deno.serve(async (req: Request) => {
 
   const jwt = authHeader.replace('Bearer ', '')
   const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(jwt)
-
-  if (authError || !user) {
-    return json({ error: 'Unauthorized' }, 401)
-  }
+  if (authError || !user) return json({ error: 'Unauthorized' }, 401)
 
   const adminEmail = Deno.env.get('ADMIN_EMAIL')
   if (!adminEmail || user.email !== adminEmail) {
     return json({ error: 'Forbidden: admin only' }, 403)
   }
 
-  // ── Route dispatch ───────────────────────────────────────────────────────────
-  const url = new URL(req.url)
-
+  // ── Route ────────────────────────────────────────────────────────────────
   try {
-    if (req.method === 'GET') {
-      return await handleList(supabaseAdmin)
-    }
-
     if (req.method === 'POST') {
       const body = await req.json()
-      return await handleCreate(supabaseAdmin, body.email, user.id)
-    }
-
-    if (req.method === 'DELETE') {
-      const id = url.searchParams.get('id')
-      if (!id) return json({ error: 'Missing id parameter' }, 400)
-      return await handleDelete(supabaseAdmin, id)
+      // emailOnly: true  → record already created by the client; just send email
+      // emailOnly: false → legacy path: create record + send email
+      if (body.emailOnly) {
+        return await handleEmailOnly(body.email as string, body.inviteLink as string)
+      }
+      return await handleCreate(supabaseAdmin, body.email as string, user.id)
     }
 
     return json({ error: 'Method not allowed' }, 405)
@@ -74,77 +68,24 @@ Deno.serve(async (req: Request) => {
   }
 })
 
-// ── Handlers ─────────────────────────────────────────────────────────────────
-
-async function handleList(supabase: ReturnType<typeof createClient>) {
-  const { data, error } = await supabase
-    .schema('salim_et')
-    .from('coordinator_invitations')
-    .select(`
-      *,
-      inviter:invited_by (full_name, email:id),
-      coordinator:email (
-        profiles!inner (id, full_name, role)
-      )
-    `)
-    .order('created_at', { ascending: false })
-
-  if (error) return json({ error: error.message }, 500)
-
-  // Also fetch profiles of accepted coordinators for the "active coordinators" section
-  const acceptedEmails = (data ?? [])
-    .filter((inv: Record<string, unknown>) => inv.status === 'accepted')
-    .map((inv: Record<string, unknown>) => inv.email as string)
-
-  let coordinators: unknown[] = []
-  if (acceptedEmails.length > 0) {
-    // Get profiles by matching auth.users email — requires service_role
-    const { data: authUsers } = await supabase.auth.admin.listUsers()
-    const matchedUsers = (authUsers?.users ?? []).filter((u) =>
-      acceptedEmails.includes(u.email ?? '')
-    )
-    const matchedIds = matchedUsers.map((u) => u.id)
-
-    if (matchedIds.length > 0) {
-      const { data: profiles } = await supabase
-        .schema('salim_et')
-        .from('profiles')
-        .select('id, full_name, role, created_at')
-        .in('id', matchedIds)
-
-      // Get group counts per coordinator
-      const { data: groups } = await supabase
-        .schema('salim_et')
-        .from('groups')
-        .select('coordinator_id')
-        .in('coordinator_id', matchedIds)
-
-      const groupCounts: Record<string, number> = {}
-      for (const g of groups ?? []) {
-        groupCounts[g.coordinator_id] = (groupCounts[g.coordinator_id] ?? 0) + 1
-      }
-
-      coordinators = (profiles ?? []).map((p) => ({
-        ...p,
-        email: matchedUsers.find((u) => u.id === p.id)?.email,
-        group_count: groupCounts[p.id] ?? 0,
-      }))
-    }
+// ── Send email only (invitation already in DB) ────────────────────────────
+async function handleEmailOnly(email: string, inviteLink: string) {
+  const emailSent = await sendBrevoEmail(email, inviteLink)
+  if (!emailSent.ok) {
+    console.error('Brevo error (emailOnly):', emailSent.body)
+    return json({ emailSent: false, emailError: emailSent.body }, 200)
   }
-
-  return json({ invitations: data ?? [], coordinators })
+  return json({ emailSent: true })
 }
 
+// ── Legacy: create record + send email ───────────────────────────────────
 async function handleCreate(
   supabase: ReturnType<typeof createClient>,
   email: string,
   invitedById: string
 ) {
-  if (!email || !email.includes('@')) {
-    return json({ error: 'Correo inválido' }, 400)
-  }
+  if (!email || !email.includes('@')) return json({ error: 'Correo inválido' }, 400)
 
-  // Check if there's already a pending invitation for this email
   const { data: existing } = await supabase
     .schema('salim_et')
     .from('coordinator_invitations')
@@ -157,7 +98,6 @@ async function handleCreate(
     return json({ error: 'Ya existe una invitación pendiente para este correo' }, 409)
   }
 
-  // Insert invitation
   const { data: invitation, error: insertError } = await supabase
     .schema('salim_et')
     .from('coordinator_invitations')
@@ -172,8 +112,18 @@ async function handleCreate(
   const siteUrl = Deno.env.get('SITE_URL') ?? ''
   const inviteLink = `${siteUrl}/coordinator-invite/${invitation.token}`
 
-  // Send Brevo email
-  const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+  const emailSent = await sendBrevoEmail(email, inviteLink)
+  if (!emailSent.ok) {
+    console.error('Brevo error (handleCreate):', emailSent.body)
+    return json({ invitation, inviteLink, emailSent: false, emailError: emailSent.body }, 201)
+  }
+
+  return json({ invitation, inviteLink, emailSent: true }, 201)
+}
+
+// ── Brevo email helper ────────────────────────────────────────────────────
+async function sendBrevoEmail(toEmail: string, inviteLink: string) {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
       'api-key': Deno.env.get('BREVO_API_KEY') ?? '',
@@ -184,64 +134,85 @@ async function handleCreate(
         name: Deno.env.get('SENDER_NAME') ?? 'ExcellenceTracker',
         email: Deno.env.get('SENDER_EMAIL') ?? 'noreply@excellencetracker.app',
       },
-      to: [{ email }],
+      to: [{ email: toEmail }],
       subject: 'Invitación como Coordinador — ExcellenceTracker',
-      htmlContent: `
-        <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;color:#1f2937">
-          <h1 style="font-size:22px;font-weight:700;margin-bottom:8px;color:#111827">
-            Fuiste invitado como Coordinador
-          </h1>
-          <p style="color:#6b7280;margin-bottom:24px">
-            Has sido invitado a unirte a <strong>ExcellenceTracker</strong> como coordinador.
-            Podrás crear y gestionar grupos, programar servicios y evaluar a tu equipo.
-          </p>
-          <a href="${inviteLink}"
-             style="display:inline-block;background:#6366f1;color:#fff;font-weight:600;
-                    padding:12px 28px;border-radius:8px;text-decoration:none;font-size:15px">
-            Aceptar invitación
-          </a>
-          <p style="margin-top:24px;font-size:12px;color:#9ca3af">
-            Este enlace expira en 30 días. Si no esperabas este correo, ignóralo.
-          </p>
-          <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0" />
-          <p style="font-size:11px;color:#d1d5db">
-            También puedes copiar y pegar este enlace en tu navegador:<br />
-            <span style="word-break:break-all">${inviteLink}</span>
-          </p>
-        </div>
-      `,
+      htmlContent: buildCoordinatorInviteHtml(inviteLink),
     }),
   })
-
-  if (!brevoRes.ok) {
-    const brevoBody = await brevoRes.text()
-    console.error('Brevo error:', brevoBody)
-    // Don't fail the whole request — invitation was created, email failed
-    return json(
-      { invitation, inviteLink, emailSent: false, emailError: brevoBody },
-      201
-    )
-  }
-
-  return json({ invitation, inviteLink, emailSent: true }, 201)
+  const body = res.ok ? '' : await res.text()
+  return { ok: res.ok, body }
 }
 
-async function handleDelete(
-  supabase: ReturnType<typeof createClient>,
-  id: string
-) {
-  const { error } = await supabase
-    .schema('salim_et')
-    .from('coordinator_invitations')
-    .delete()
-    .eq('id', id)
+// ── Email HTML template ───────────────────────────────────────────────────
+// Edit this function to customise the coordinator invitation email.
+function buildCoordinatorInviteHtml(inviteLink: string): string {
+  return `
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:40px 0">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0"
+             style="background:#ffffff;border-radius:12px;overflow:hidden;
+                    box-shadow:0 1px 3px rgba(0,0,0,.1)">
 
-  if (error) return json({ error: error.message }, 500)
-  return json({ success: true })
+        <!-- Header -->
+        <tr>
+          <td style="background:#6366f1;padding:28px 32px">
+            <p style="margin:0;font-size:20px;font-weight:700;color:#ffffff;letter-spacing:-0.3px">
+              ExcellenceTracker
+            </p>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:32px">
+            <h1 style="margin:0 0 12px;font-size:22px;font-weight:700;color:#111827">
+              Fuiste invitado como Coordinador
+            </h1>
+            <p style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.6">
+              Has sido invitado a unirte a <strong style="color:#374151">ExcellenceTracker</strong>
+              como coordinador. Podrás crear y gestionar grupos de servidores, programar servicios
+              y evaluar el desempeño de tu equipo.
+            </p>
+            <table cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="border-radius:8px;background:#6366f1">
+                  <a href="${inviteLink}"
+                     style="display:inline-block;padding:14px 32px;font-size:15px;
+                            font-weight:600;color:#ffffff;text-decoration:none;
+                            border-radius:8px">
+                    Aceptar invitación →
+                  </a>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:24px 0 0;font-size:12px;color:#9ca3af">
+              Este enlace expira en 30 días. Si no esperabas este correo, puedes ignorarlo.
+            </p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:20px 32px;background:#f9fafb;border-top:1px solid #e5e7eb">
+            <p style="margin:0;font-size:11px;color:#9ca3af">
+              Si el botón no funciona, copia y pega este enlace en tu navegador:<br>
+              <span style="color:#6366f1;word-break:break-all">${inviteLink}</span>
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
+// ── Helpers ───────────────────────────────────────────────────────────────
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
