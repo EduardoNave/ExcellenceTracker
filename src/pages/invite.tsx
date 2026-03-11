@@ -1,101 +1,183 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
-import { useAcceptInvitation } from '@/hooks/use-invitations'
+import { supabase } from '@/lib/supabase'
 import { LoadingSpinner } from '@/components/common/loading-spinner'
-import { CheckCircle, XCircle, LogIn, Loader2 } from 'lucide-react'
+import { CheckCircle, XCircle, Users, Loader2 } from 'lucide-react'
 
-type PageStatus = 'loading' | 'needs_auth' | 'accepting' | 'success' | 'error'
-type AuthMode = 'login' | 'register'
+type PageStatus = 'loading' | 'form' | 'logged-in' | 'submitting' | 'success' | 'error'
+
+interface InvitationData {
+  email: string
+  group_id: string
+  group_name: string
+  inviter_email: string | null
+}
 
 export default function InvitePage() {
   const { token } = useParams<{ token: string }>()
   const navigate = useNavigate()
-  const { user, isLoading: authLoading, signIn, signUp } = useAuth()
-  const acceptMutation = useAcceptInvitation()
+  const { user, isLoading: authLoading, signUp } = useAuth()
 
-  const [status, setStatus] = useState<PageStatus>('loading')
+  const [pageStatus, setPageStatus] = useState<PageStatus>('loading')
+  const [invitation, setInvitation] = useState<InvitationData | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
-  const [, setAcceptedGroupId] = useState<string | null>(null)
+  const [formError, setFormError] = useState('')
 
-  // Auth form state
-  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  // Form fields
   const [fullName, setFullName] = useState('')
-  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [authError, setAuthError] = useState('')
-  const [authLoading2, setAuthLoading2] = useState(false)
 
+  // ── Step 1: Fetch invitation details on mount ──────────────────────────
   useEffect(() => {
-    if (authLoading) return
-
-    if (!user) {
-      if (token) localStorage.setItem('pending_invitation_token', token)
-      setStatus('needs_auth')
+    if (!token) {
+      setErrorMsg('Token de invitación inválido.')
+      setPageStatus('error')
       return
     }
 
-    if (token && status === 'loading') {
-      setStatus('accepting')
-      acceptMutation.mutate(token, {
-        onSuccess: (result) => {
-          if (result.success) {
-            setAcceptedGroupId(result.group_id ?? null)
-            setStatus('success')
-            localStorage.removeItem('pending_invitation_token')
-          } else {
-            setErrorMsg(result.error ?? 'Error desconocido')
-            setStatus('error')
-          }
-        },
-        onError: (err: any) => {
-          setErrorMsg(err?.message ?? 'Error al aceptar la invitación')
-          setStatus('error')
-        },
+    let cancelled = false
+
+    async function load() {
+      const { data, error } = await (supabase as any)
+        .from('invitations')
+        .select('email, status, expires_at, group_id, groups(name), inviter_profile:profiles(email)')
+        .eq('token', token)
+        .single()
+
+      if (cancelled) return
+
+      if (error || !data) {
+        setErrorMsg('Invitación no encontrada.')
+        setPageStatus('error')
+        return
+      }
+
+      if (data.status !== 'pending' || new Date(data.expires_at) < new Date()) {
+        setErrorMsg('Esta invitación ya fue usada o expiró.')
+        setPageStatus('error')
+        return
+      }
+
+      setInvitation({
+        email: data.email,
+        group_id: data.group_id,
+        group_name: data.groups?.name ?? 'Equipo',
+        inviter_email: data.inviter_profile?.email ?? null,
       })
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user, token])
 
-  // If user signs in while on this page, re-trigger the accept flow
+    load()
+    return () => { cancelled = true }
+  }, [token])
+
+  // ── Step 2: Once invitation + auth state are known, choose UI ──────────
   useEffect(() => {
-    if (user && status === 'needs_auth' && token) {
-      setStatus('loading')
-    }
-  }, [user, status, token])
+    if (!invitation || authLoading) return
+    setPageStatus(user ? 'logged-in' : 'form')
+  }, [invitation, authLoading, user])
 
-  async function handleAuth(e: React.FormEvent) {
-    e.preventDefault()
-    setAuthError('')
-    setAuthLoading2(true)
+  // ── Shared: notify coordinator (best-effort) ───────────────────────────
+  async function notifyCoordinator(memberName: string) {
+    if (!invitation?.inviter_email) return
     try {
-      if (authMode === 'login') {
-        await signIn(email, password)
-      } else {
-        await signUp(email, password, fullName, 'server')
-      }
-      // useEffect fires after auth state changes and kicks off accept flow
-    } catch (err: any) {
-      setAuthError(err?.message ?? 'Error de autenticación')
-    } finally {
-      setAuthLoading2(false)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-email`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          template_id: 'invitation_accepted',
+          to_email: invitation.inviter_email,
+          variables: {
+            member_name: memberName,
+            group_name: invitation.group_name,
+            member_email: invitation.email,
+          },
+        }),
+      })
+    } catch (err) {
+      console.warn('Coordinator notification failed (non-critical):', err)
     }
   }
 
-  if (status === 'loading' || status === 'accepting') {
+  // ── Flow A: New user — register + accept ───────────────────────────────
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!invitation || !token) return
+    setFormError('')
+    setPageStatus('submitting')
+
+    try {
+      // 1. Create account
+      await signUp(invitation.email, password, fullName)
+
+      // 2. Sign in (signUp may not auto-sign in when email confirm is enabled)
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: invitation.email,
+        password,
+      })
+      if (signInError) throw signInError
+
+      // 3. Accept invitation via RPC
+      const { data: result, error: rpcError } = await supabase.rpc(
+        'accept_invitation',
+        { p_token: token }
+      ) as any
+      if (rpcError) throw rpcError
+      if (!result?.success) throw new Error(result?.error ?? 'No se pudo aceptar la invitación')
+
+      // 4. Notify coordinator (non-blocking)
+      await notifyCoordinator(fullName)
+
+      setPageStatus('success')
+    } catch (err: any) {
+      setFormError(err?.message ?? 'Error al procesar la invitación')
+      setPageStatus('form')
+    }
+  }
+
+  // ── Flow B: Existing logged-in user — just accept ─────────────────────
+  async function handleAccept() {
+    if (!invitation || !token) return
+    setPageStatus('submitting')
+
+    try {
+      const { data: result, error: rpcError } = await supabase.rpc(
+        'accept_invitation',
+        { p_token: token }
+      ) as any
+      if (rpcError) throw rpcError
+      if (!result?.success) throw new Error(result?.error ?? 'No se pudo aceptar la invitación')
+
+      await notifyCoordinator(user?.email ?? 'Miembro')
+
+      setPageStatus('success')
+    } catch (err: any) {
+      setErrorMsg(err?.message ?? 'Error al aceptar la invitación')
+      setPageStatus('error')
+    }
+  }
+
+  // ── Render: Loading / Submitting ───────────────────────────────────────
+  if (pageStatus === 'loading' || pageStatus === 'submitting') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-100">
         <div className="text-center space-y-4">
           <LoadingSpinner className="h-8 w-8 mx-auto" />
           <p className="text-gray-600">
-            {status === 'loading' ? 'Cargando...' : 'Aceptando invitación...'}
+            {pageStatus === 'loading' ? 'Cargando invitación...' : 'Procesando...'}
           </p>
         </div>
       </div>
     )
   }
 
-  if (status === 'success') {
+  // ── Render: Success ────────────────────────────────────────────────────
+  if (pageStatus === 'success') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-100 px-4">
         <div className="w-full max-w-md">
@@ -104,11 +186,10 @@ export default function InvitePage() {
               <CheckCircle className="h-8 w-8 text-green-600" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                ¡Te has unido al equipo!
-              </h1>
+              <h1 className="text-xl font-bold text-gray-900">¡Te has unido al equipo!</h1>
               <p className="mt-2 text-sm text-gray-500">
-                Tu invitación fue aceptada exitosamente. Ya puedes ver los servicios y evaluaciones asignados.
+                Ya formas parte del grupo{' '}
+                <span className="font-medium text-gray-700">{invitation?.group_name}</span>.
               </p>
             </div>
             <button
@@ -123,7 +204,8 @@ export default function InvitePage() {
     )
   }
 
-  if (status === 'error') {
+  // ── Render: Error ──────────────────────────────────────────────────────
+  if (pageStatus === 'error') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-100 px-4">
         <div className="w-full max-w-md">
@@ -132,22 +214,45 @@ export default function InvitePage() {
               <XCircle className="h-8 w-8 text-red-600" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">Error en la invitación</h1>
+              <h1 className="text-xl font-bold text-gray-900">Invitación inválida</h1>
               <p className="mt-2 text-sm text-gray-500">{errorMsg}</p>
             </div>
-            <button
-              onClick={() => navigate('/dashboard')}
-              className="w-full rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
-            >
-              Ir al panel principal
-            </button>
           </div>
         </div>
       </div>
     )
   }
 
-  // needs_auth — inline login/register form
+  // ── Render: Logged-in confirm ──────────────────────────────────────────
+  if (pageStatus === 'logged-in') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-100 px-4">
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+            <div className="bg-primary-600 px-6 py-8 text-center">
+              <Users className="h-12 w-12 text-white mx-auto mb-3" />
+              <h2 className="text-xl font-bold text-white">Invitación al equipo</h2>
+              <p className="mt-1 text-primary-100 text-sm">{invitation?.group_name}</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600 text-center">
+                Estás por unirte al grupo{' '}
+                <strong className="text-gray-800">{invitation?.group_name}</strong>.
+              </p>
+              <button
+                onClick={handleAccept}
+                className="w-full rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+              >
+                Aceptar invitación
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Render: Registration form (new user) ───────────────────────────────
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-100 px-4">
       <div className="w-full max-w-md">
@@ -157,79 +262,56 @@ export default function InvitePage() {
         </div>
 
         <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-          {/* Header */}
           <div className="bg-primary-50 border-b border-primary-100 px-6 py-5 text-center">
             <div className="mx-auto h-12 w-12 rounded-full bg-primary-100 flex items-center justify-center mb-3">
-              <LogIn className="h-6 w-6 text-primary-600" />
+              <Users className="h-6 w-6 text-primary-600" />
             </div>
-            <h2 className="text-lg font-semibold text-gray-900">Invitación a un equipo</h2>
+            <h2 className="text-lg font-semibold text-gray-900">
+              Invitación al grupo{' '}
+              <span className="text-primary-600">{invitation?.group_name}</span>
+            </h2>
             <p className="mt-1 text-sm text-gray-500">
-              {authMode === 'login'
-                ? 'Inicia sesión para aceptar tu invitación.'
-                : 'Crea tu cuenta para aceptar la invitación.'}
+              Crea tu cuenta para aceptar la invitación.
             </p>
           </div>
 
-          {/* Auth mode toggle */}
-          <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => { setAuthMode('login'); setAuthError('') }}
-              className={`flex-1 py-3 text-center text-sm font-medium transition-colors ${
-                authMode === 'login'
-                  ? 'border-b-2 border-primary-600 text-primary-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Iniciar sesión
-            </button>
-            <button
-              onClick={() => { setAuthMode('register'); setAuthError('') }}
-              className={`flex-1 py-3 text-center text-sm font-medium transition-colors ${
-                authMode === 'register'
-                  ? 'border-b-2 border-primary-600 text-primary-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Crear cuenta
-            </button>
-          </div>
-
           <div className="p-6">
-            {authError && (
+            {formError && (
               <div className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">
-                {authError}
+                {formError}
               </div>
             )}
 
-            <form onSubmit={handleAuth} className="space-y-4">
-              {authMode === 'register' && (
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Nombre completo
-                  </label>
-                  <input
-                    type="text"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    required
-                    placeholder="Juan Pérez"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                  />
-                </div>
-              )}
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Nombre completo
+                </label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                  placeholder="Juan Pérez"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+              </div>
+
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">
                   Correo electrónico
                 </label>
                 <input
                   type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  placeholder="correo@ejemplo.com"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  value={invitation?.email ?? ''}
+                  readOnly
+                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed"
                 />
+                <p className="mt-1 text-xs text-gray-400">
+                  Correo al que fue enviada la invitación.
+                </p>
               </div>
+
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">
                   Contraseña
@@ -239,23 +321,23 @@ export default function InvitePage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  minLength={authMode === 'register' ? 6 : undefined}
-                  placeholder={authMode === 'register' ? 'Mínimo 6 caracteres' : 'Tu contraseña'}
+                  minLength={6}
+                  placeholder="Mínimo 6 caracteres"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
                 />
               </div>
+
               <button
                 type="submit"
-                disabled={authLoading2}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50 transition-colors"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
               >
-                {authLoading2 && <Loader2 className="h-4 w-4 animate-spin" />}
-                {authMode === 'login' ? 'Iniciar sesión y aceptar' : 'Registrarme y aceptar'}
+                <Loader2 className="h-4 w-4 animate-spin hidden" aria-hidden />
+                Registrarme y aceptar
               </button>
             </form>
 
             <p className="mt-3 text-center text-xs text-gray-400">
-              Tu invitación se aceptará automáticamente al ingresar.
+              Al registrarte aceptarás automáticamente la invitación.
             </p>
           </div>
         </div>

@@ -6,12 +6,11 @@ interface AdminRouteProps {
 }
 
 export function AdminRoute({ children }: AdminRouteProps) {
-  const { user, isLoading } = useAuth()
-  const adminEmail = import.meta.env.VITE_ADMIN_EMAIL
+  const { profile, isLoading } = useAuth()
 
   if (isLoading) return null
 
-  if (!adminEmail || user?.email !== adminEmail) {
+  if (!profile?.is_admin) {
     return <Navigate to="/dashboard" replace />
   }
 

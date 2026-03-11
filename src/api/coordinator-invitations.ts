@@ -101,20 +101,22 @@ export async function createCoordinatorInvitation(
   const invitation = data as CoordinatorInvitation
   const inviteLink = `${window.location.origin}/coordinator-invite/${invitation.token}`
 
-  // Attempt email via edge function (optional — graceful fail if not deployed)
+  // Attempt email via send-email edge function (optional — graceful fail if unavailable)
   let emailSent = false
   try {
     const { data: { session } } = await supabase.auth.getSession()
     if (session?.access_token) {
-      const res = await fetch(`${EDGE_FN_BASE}/coordinator-invitations`, {
+      const res = await fetch(`${EDGE_FN_BASE}/send-email`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
-        // emailOnly: true tells the edge function NOT to re-insert the record,
-        // just send the Brevo email for an already-created invitation.
-        body: JSON.stringify({ email, token: invitation.token, inviteLink, emailOnly: true }),
+        body: JSON.stringify({
+          template_id: 'coordinator_invitation',
+          to_email: email,
+          variables: { invite_link: inviteLink },
+        }),
       })
       emailSent = res.ok
     }
@@ -164,17 +166,20 @@ export async function sendGroupInvitationEmail(params: {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session?.access_token) return
 
-  const res = await fetch(`${EDGE_FN_BASE}/send-group-invitation-email`, {
+  const res = await fetch(`${EDGE_FN_BASE}/send-email`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      template_id: 'group_invitation',
       to_email: params.toEmail,
-      invite_link: params.inviteLink,
-      group_name: params.groupName,
-      invited_by_name: params.invitedByName,
+      variables: {
+        invite_link: params.inviteLink,
+        group_name: params.groupName,
+        invited_by_name: params.invitedByName,
+      },
     }),
   })
   if (!res.ok) {

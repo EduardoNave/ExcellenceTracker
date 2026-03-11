@@ -395,6 +395,29 @@ export type Database = {
           score?: number
         }
       }
+      email_templates: {
+        Row: {
+          id: string
+          name: string
+          subject: string
+          html_body: string
+          variables: string[]
+          updated_at: string
+        }
+        Insert: {
+          id: string
+          name: string
+          subject: string
+          html_body: string
+          variables?: string[]
+          updated_at?: string
+        }
+        Update: {
+          subject?: string
+          html_body?: string
+          updated_at?: string
+        }
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>
