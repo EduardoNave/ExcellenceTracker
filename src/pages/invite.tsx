@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { supabase } from '@/lib/supabase'
 import { LoadingSpinner } from '@/components/common/loading-spinner'
-import { CheckCircle, XCircle, Users, UserX, Loader2 } from 'lucide-react'
+import { CheckCircle, XCircle, Users, UserX } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type PageStatus =
@@ -24,6 +24,39 @@ interface InvitationDetails {
   account_is_active: boolean | null
 }
 
+// ── Module-level layout components (stable references — no focus loss) ─────
+// IMPORTANT: These must live outside InvitePage so React doesn't unmount/remount
+// inputs on every state change (which would cause focus to be lost after each keystroke).
+
+function PageWrapper({ children, showHeader }: { children: React.ReactNode; showHeader?: boolean }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-100 px-4">
+      <div className="w-full max-w-md">
+        {showHeader && (
+          <div className="mb-8 text-center">
+            <h1 className="text-3xl font-bold text-primary-900">ExcellenceTracker</h1>
+            <p className="mt-2 text-gray-500">Sistema de evaluación de excelencia</p>
+          </div>
+        )}
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function CardHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
+  return (
+    <div className="bg-primary-50 border-b border-primary-100 px-6 py-5 text-center">
+      <div className="mx-auto h-12 w-12 rounded-full bg-primary-100 flex items-center justify-center mb-3">
+        {icon}
+      </div>
+      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+      <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
+    </div>
+  )
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────
 export default function InvitePage() {
   const { token } = useParams<{ token: string }>()
   const navigate = useNavigate()
@@ -228,7 +261,7 @@ export default function InvitePage() {
     }
   }
 
-  // ── Render helpers ─────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────
   const isSubmitting = pageStatus === 'submitting'
 
   if (pageStatus === 'loading' || isSubmitting) {
@@ -283,35 +316,10 @@ export default function InvitePage() {
     )
   }
 
-  // ── Layout wrapper (shared) ────────────────────────────────────────────
-  const PageWrapper = ({ children }: { children: React.ReactNode }) => (
-    <div className="flex min-h-screen items-center justify-center bg-gray-100 px-4">
-      <div className="w-full max-w-md">
-        {pageStatus !== 'logged-in' && (
-          <div className="mb-8 text-center">
-            <h1 className="text-3xl font-bold text-primary-900">ExcellenceTracker</h1>
-            <p className="mt-2 text-gray-500">Sistema de evaluación de excelencia</p>
-          </div>
-        )}
-        {children}
-      </div>
-    </div>
-  )
-
-  const CardHeader = ({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) => (
-    <div className="bg-primary-50 border-b border-primary-100 px-6 py-5 text-center">
-      <div className="mx-auto h-12 w-12 rounded-full bg-primary-100 flex items-center justify-center mb-3">
-        {icon}
-      </div>
-      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-      <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
-    </div>
-  )
-
   // ── Scenario D: Already logged in ─────────────────────────────────────
   if (pageStatus === 'logged-in') {
     return (
-      <PageWrapper>
+      <PageWrapper showHeader={false}>
         <div className="bg-white rounded-xl shadow-lg overflow-hidden">
           <div className="bg-primary-600 px-6 py-8 text-center">
             <Users className="h-12 w-12 text-white mx-auto mb-3" />
@@ -338,7 +346,7 @@ export default function InvitePage() {
   // ── Scenario A: New user ───────────────────────────────────────────────
   if (pageStatus === 'form-register') {
     return (
-      <PageWrapper>
+      <PageWrapper showHeader>
         <div className="bg-white rounded-xl shadow-lg overflow-hidden">
           <CardHeader
             icon={<Users className="h-6 w-6 text-primary-600" />}
@@ -350,24 +358,41 @@ export default function InvitePage() {
             <form onSubmit={handleRegister} className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Nombre completo</label>
-                <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
                   placeholder="Juan Pérez"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Correo electrónico</label>
-                <input type="email" value={invitation?.email ?? ''} readOnly
-                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed" />
+                <input
+                  type="email"
+                  value={invitation?.email ?? ''}
+                  readOnly
+                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed"
+                />
                 <p className="mt-1 text-xs text-gray-400">Correo al que fue enviada la invitación.</p>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Contraseña</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  required minLength={6} placeholder="Mínimo 6 caracteres"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  placeholder="Mínimo 6 caracteres"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
               </div>
-              <button type="submit"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors">
+              <button
+                type="submit"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+              >
                 Registrarme y aceptar
               </button>
             </form>
@@ -381,7 +406,7 @@ export default function InvitePage() {
   // ── Scenario B: Existing active account ───────────────────────────────
   if (pageStatus === 'form-login') {
     return (
-      <PageWrapper>
+      <PageWrapper showHeader>
         <div className="bg-white rounded-xl shadow-lg overflow-hidden">
           <CardHeader
             icon={<Users className="h-6 w-6 text-primary-600" />}
@@ -393,17 +418,28 @@ export default function InvitePage() {
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Correo electrónico</label>
-                <input type="email" value={invitation?.email ?? ''} readOnly
-                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed" />
+                <input
+                  type="email"
+                  value={invitation?.email ?? ''}
+                  readOnly
+                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed"
+                />
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Contraseña</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  required placeholder="Tu contraseña"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  placeholder="Tu contraseña"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
               </div>
-              <button type="submit"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors">
+              <button
+                type="submit"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+              >
                 Iniciar sesión y aceptar
               </button>
             </form>
@@ -415,7 +451,7 @@ export default function InvitePage() {
 
   // ── Scenario C: Deactivated account — reactivation ─────────────────────
   return (
-    <PageWrapper>
+    <PageWrapper showHeader>
       <div className="bg-white rounded-xl shadow-lg overflow-hidden">
         <div className="bg-amber-50 border-b border-amber-100 px-6 py-5 text-center">
           <div className="mx-auto h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center mb-3">
@@ -432,18 +468,29 @@ export default function InvitePage() {
           <form onSubmit={handleReactivate} className="space-y-4">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Correo electrónico</label>
-              <input type="email" value={invitation?.email ?? ''} readOnly
-                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed" />
+              <input
+                type="email"
+                value={invitation?.email ?? ''}
+                readOnly
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 cursor-not-allowed"
+              />
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Nueva contraseña</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                required minLength={6} placeholder="Mínimo 6 caracteres"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                placeholder="Mínimo 6 caracteres"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
             </div>
-            <button type="submit"
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 transition-colors">
-              <Loader2 className="h-4 w-4 animate-spin hidden" aria-hidden />
+            <button
+              type="submit"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 transition-colors"
+            >
               Reactivar cuenta y unirse
             </button>
           </form>
