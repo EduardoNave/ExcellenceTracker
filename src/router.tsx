@@ -15,6 +15,7 @@ import ProfilePage from '@/pages/profile'
 import InvitePage from '@/pages/invite'
 import CoordinatorInvitePage from '@/pages/coordinator-invite'
 import AdminPage from '@/pages/admin'
+import AccountInactivePage from '@/pages/account-inactive'
 
 export const router = createBrowserRouter([
   {
@@ -28,6 +29,10 @@ export const router = createBrowserRouter([
   {
     path: '/coordinator-invite/:token',
     element: <CoordinatorInvitePage />,
+  },
+  {
+    path: '/account-inactive',
+    element: <AccountInactivePage />,
   },
   {
     path: '/',

@@ -17,6 +17,7 @@ export type Database = {
           role: 'coordinator' | 'server'
           email: string | null
           is_admin: boolean
+          is_active: boolean
           created_at: string
           updated_at: string
         }
@@ -27,6 +28,7 @@ export type Database = {
           role?: 'coordinator' | 'server'
           email?: string | null
           is_admin?: boolean
+          is_active?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -37,6 +39,7 @@ export type Database = {
           role?: 'coordinator' | 'server'
           email?: string | null
           is_admin?: boolean
+          is_active?: boolean
           created_at?: string
           updated_at?: string
         }

@@ -5,7 +5,7 @@ import { AppShell } from '@/components/layout/app-shell'
 import { Loader2 } from 'lucide-react'
 
 export function ProtectedLayout() {
-  const { user, isLoading } = useAuth()
+  const { user, profile, isLoading } = useAuth()
 
   if (isLoading) {
     return (
@@ -17,6 +17,10 @@ export function ProtectedLayout() {
 
   if (!user) {
     return <Navigate to="/login" replace />
+  }
+
+  if (profile && !profile.is_active) {
+    return <Navigate to="/account-inactive" replace />
   }
 
   return (

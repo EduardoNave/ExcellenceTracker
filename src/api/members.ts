@@ -31,9 +31,9 @@ export async function addMemberByEmail(groupId: string, email: string) {
 }
 
 export async function removeMember(memberId: string) {
-  const { error } = await supabase
-    .from('group_members')
-    .delete()
-    .eq('id', memberId)
-  if (error) throw error
+  const { data, error } = await supabase.rpc('remove_member', {
+    p_group_member_id: memberId,
+  }) as any
+  if (error) throw new Error(error.message)
+  if (!data?.success) throw new Error(data?.error ?? 'No se pudo eliminar al miembro')
 }
