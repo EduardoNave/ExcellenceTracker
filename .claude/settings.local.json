@@ -19,7 +19,8 @@
       "Bash(python3 -:*)",
       "Bash(python3 -c \":*)",
       "Bash(/c/Python313/python -c \"import sys; print\\(sys.version\\); import os; print\\(os.path.isdir\\(''D:/Documents/Projects/ExcellenceTracker/supabase/migrations''\\)\\)\")",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
